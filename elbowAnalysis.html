@@ -89,42 +89,38 @@
     // Dimensions
     const liveWidth = 640, liveHeight = 480;
     let liveStream = null;
-
-    // Global variables to store captured angles and live angle
+    
+    // Global variables to store captured angles and current live angle
     let extAngle = null;
     let flexAngle = null;
     let currentLiveAngle = null;
-
+    
     // Get live video, canvas, and report elements
     const liveVideo = document.getElementById('liveVideo');
     const liveCanvas = document.getElementById('liveCanvas');
     const liveCtx = liveCanvas.getContext('2d');
     const liveReport = document.getElementById('liveReport');
-
-    // Use RIGHT side landmarks for visible left elbow
+    
+    // Use RIGHT side landmarks to represent the visible left elbow
     const PoseLandmark = {
       RIGHT_SHOULDER: { value: 12 },
       RIGHT_ELBOW: { value: 14 },
       RIGHT_WRIST: { value: 16 }
     };
-
-    // Helper: Calculate angle between three points in degrees
+    
+    // Helper: Calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let angle = Math.abs(radians * 180.0 / Math.PI);
       if (angle > 180) angle = 360 - angle;
       return angle;
     }
-
+    
     // Helper: Convert normalized landmark to pixel coordinates
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
-
-    // Define drawing functions (falling back to window.DrawingUtils if needed)
-    const drawConnectors = window.drawConnectors || (window.DrawingUtils && window.DrawingUtils.drawConnectors);
-    const drawLandmarks = window.drawLandmarks || (window.DrawingUtils && window.DrawingUtils.drawLandmarks);
-
+    
     // Initialize Mediapipe Pose for live measurement
     const livePose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -136,8 +132,8 @@
       minTrackingConfidence: 0.7
     });
     livePose.onResults(onLiveResults);
-
-    // Start live measurement (webcam)
+    
+    // Start live measurement
     async function startLive() {
       try {
         liveStream = await navigator.mediaDevices.getUserMedia({ video: { width: liveWidth, height: liveHeight } });
@@ -148,7 +144,7 @@
         console.error("Error accessing webcam:", error);
       }
     }
-
+    
     // Stop live measurement
     function stopLive() {
       if (liveStream) {
@@ -162,34 +158,43 @@
       flexAngle = null;
       currentLiveAngle = null;
     }
-
-    // Process each frame from the live video
+    
+    // Process each frame
     async function processLiveFrame() {
       if (liveVideo.paused || liveVideo.ended) return;
       liveCtx.drawImage(liveVideo, 0, 0, liveWidth, liveHeight);
       await livePose.send({ image: liveVideo });
       requestAnimationFrame(processLiveFrame);
     }
-
+    
     // Live pose results callback
     function onLiveResults(results) {
       liveCtx.clearRect(0, 0, liveWidth, liveHeight);
       liveCtx.drawImage(results.image, 0, 0, liveWidth, liveHeight);
       if (results.poseLandmarks) {
-        if (drawConnectors && drawLandmarks) {
-          drawConnectors(liveCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-          drawLandmarks(liveCtx, results.poseLandmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
-        } else {
-          console.log("Drawing functions not available.");
-        }
+        // Draw connectors with white lines
+        window.drawConnectors(liveCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
+        
+        // Manually draw landmarks as red circles
+        results.poseLandmarks.forEach(landmark => {
+          const pt = toPixel(landmark, liveWidth, liveHeight);
+          liveCtx.beginPath();
+          liveCtx.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
+          liveCtx.fillStyle = '#FF0000';
+          liveCtx.fill();
+        });
+        
         const landmarks = results.poseLandmarks;
+        // Use right side landmarks for the visible left elbow
         const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], liveWidth, liveHeight);
         const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], liveWidth, liveHeight);
         const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], liveWidth, liveHeight);
         currentLiveAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
+        
         liveCtx.font = "20px Arial";
         liveCtx.fillStyle = "white";
         liveCtx.fillText(`Visible (Left) Elbow: ${currentLiveAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
+        
         liveReport.innerHTML = `
           <h3>Live Elbow Measurement</h3>
           <p>Current Visible Elbow (Left): ${currentLiveAngle.toFixed(2)}°</p>
@@ -198,8 +203,8 @@
         liveReport.innerHTML = `<p>No pose detected.</p>`;
       }
     }
-
-    // Capture the extension measurement from the current live angle
+    
+    // Capture extension angle
     function captureExtension() {
       if (currentLiveAngle !== null) {
         extAngle = currentLiveAngle;
@@ -207,8 +212,8 @@
         updateFinalReport();
       }
     }
-
-    // Capture the flexion measurement from the current live angle
+    
+    // Capture flexion angle
     function captureFlexion() {
       if (currentLiveAngle !== null) {
         flexAngle = currentLiveAngle;
@@ -216,8 +221,8 @@
         updateFinalReport();
       }
     }
-
-    // Update the final report once both extension and flexion values are captured
+    
+    // Update final report when both angles are captured
     function updateFinalReport() {
       if (extAngle !== null && flexAngle !== null) {
         const rom = Math.abs(extAngle - flexAngle);
@@ -232,8 +237,8 @@
         `;
       }
     }
-
-    // Attach event listeners for buttons
+    
+    // Attach event listeners
     document.getElementById('startLive').addEventListener('click', startLive);
     document.getElementById('captureExtension').addEventListener('click', captureExtension);
     document.getElementById('captureFlexion').addEventListener('click', captureFlexion);
