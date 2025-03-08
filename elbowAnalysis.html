@@ -2,11 +2,11 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Elbow Range Live Analysis</title>
+  <title>Elbow Range Analysis</title>
   <style>
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       background-color: #f2f2f2;
       text-align: center;
       color: #333;
@@ -14,49 +14,54 @@
     header {
       background-color: #003366;
       color: #fff;
-      padding: 20px;
-      font-size: 36px;
+      padding: 35px;
+      font-size: 48px;
       font-weight: bold;
     }
     #controls {
       margin: 20px 0;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
     }
-    #controls button {
-      margin: 5px;
-      padding: 10px 15px;
-      font-size: 16px;
+    .upload-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .upload-container label {
+      cursor: pointer;
+      padding: 10px 20px;
       background-color: #003366;
       color: #fff;
-      border: none;
       border-radius: 5px;
-      cursor: pointer;
+      font-size: 16px;
+      margin-bottom: 5px;
     }
-    #liveContainer {
-      position: relative;
-      width: 640px;
-      height: 480px;
+    .upload-container input {
+      display: none;
+    }
+    #canvasContainer {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
       margin: 0 auto;
-      background: #000;
+      max-width: 90%;
     }
-    #liveVideo {
-      position: absolute;
-      width: 640px;
-      height: 480px;
-      object-fit: cover;
-      transform: scaleX(-1); /* Mirror for selfie view */
-    }
-    #liveCanvas {
-      position: absolute;
-      width: 640px;
-      height: 480px;
-      pointer-events: none;
+    canvas {
+      background-color: #fff;
+      border: 1px solid #ccc;
+      max-width: 100%;
+      height: auto;
     }
     #report {
-      margin-top: 20px;
+      margin-top: 30px;
       padding: 15px;
       background: #fff;
       border: 1px solid #ccc;
-      max-width: 640px;
+      max-width: 600px;
       margin-left: auto;
       margin-right: auto;
       text-align: left;
@@ -66,157 +71,190 @@
   </style>
 </head>
 <body>
-  <header>Elbow Range Live Analysis</header>
+  <header>Elbow Range Analysis</header>
   <div id="controls">
-    <button id="startLive">Start Live Measurement</button>
-    <button id="captureExtension">Capture Extension</button>
-    <button id="captureFlexion">Capture Flexion</button>
-    <button id="stopLive">Stop Live Measurement</button>
+    <div class="upload-container">
+      <label for="extensionInput">Upload Extension Image</label>
+      <input type="file" id="extensionInput" accept="image/*">
+    </div>
+    <div class="upload-container">
+      <label for="flexionInput">Upload Flexion Image</label>
+      <input type="file" id="flexionInput" accept="image/*">
+    </div>
   </div>
-  <div id="liveContainer">
-    <video id="liveVideo" autoplay playsinline muted></video>
-    <canvas id="liveCanvas"></canvas>
+  <div id="canvasContainer">
+    <canvas id="canvas_extension"></canvas>
+    <canvas id="canvas_flexion"></canvas>
   </div>
   <div id="report"></div>
-  
+
   <!-- Load Mediapipe Pose and Drawing Utils -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script>
-    const liveWidth = 640, liveHeight = 480;
-    let liveStream = null;
-    let currentLiveAngle = null;
-    let extAngle = null;
+    // Global variables for extension image processing
+    let extAngle = null;  // We'll use one angle value from the visible left elbow
+    let extImgWidth = 0, extImgHeight = 0;
+    // Global variables for flexion image processing
     let flexAngle = null;
-    
-    const liveVideo = document.getElementById('liveVideo');
-    const liveCanvas = document.getElementById('liveCanvas');
-    liveCanvas.width = liveWidth;
-    liveCanvas.height = liveHeight;
-    const liveCtx = liveCanvas.getContext('2d');
+    let flexImgWidth = 0, flexImgHeight = 0;
+    const maxWidth = 600; // maximum display width
+
+    // Get canvas and report elements
+    const canvasExtension = document.getElementById('canvas_extension');
+    const ctxExtension = canvasExtension.getContext('2d');
+    const canvasFlexion = document.getElementById('canvas_flexion');
+    const ctxFlexion = canvasFlexion.getContext('2d');
     const reportDiv = document.getElementById('report');
-    
-    // For mirror-corrected visible left elbow, we use the RIGHT side landmarks:
-    const RIGHT_SHOULDER_IDX = 12;
-    const RIGHT_ELBOW_IDX = 14;
-    const RIGHT_WRIST_IDX = 16;
-    
+
+    // Define landmark indices from Mediapipe Pose (using PoseLandmark values)
+    const PoseLandmark = {
+      LEFT_SHOULDER: { value: 11 },
+      LEFT_ELBOW: { value: 13 },
+      LEFT_WRIST: { value: 15 },
+      RIGHT_SHOULDER: { value: 12 },
+      RIGHT_ELBOW: { value: 14 },
+      RIGHT_WRIST: { value: 16 }
+    };
+
+    // Helper: Calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let angle = Math.abs(radians * 180.0 / Math.PI);
       if (angle > 180) angle = 360 - angle;
       return angle;
     }
-    
+
+    // Helper: Convert normalized landmark to pixel coordinates for given width/height
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
-    
-    // Initialize Mediapipe Pose
-    const pose = new Pose({
+
+    // Create two MediaPipe Pose instances for extension and flexion images
+    const poseExtension = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
-    pose.setOptions({
+    poseExtension.setOptions({
       modelComplexity: 1,
       smoothLandmarks: true,
       minDetectionConfidence: 0.7,
       minTrackingConfidence: 0.7
     });
-    pose.onResults(onResults);
-    
-    async function startLive() {
-      try {
-        liveStream = await navigator.mediaDevices.getUserMedia({ video: { width: liveWidth, height: liveHeight } });
-        liveVideo.srcObject = liveStream;
-        liveVideo.play();
-        requestAnimationFrame(processFrame);
-      } catch (error) {
-        console.error("Error accessing webcam:", error);
-      }
-    }
-    
-    function stopLive() {
-      if (liveStream) {
-        liveStream.getTracks().forEach(track => track.stop());
-      }
-      liveVideo.pause();
-      liveVideo.srcObject = null;
-      liveCtx.clearRect(0, 0, liveWidth, liveHeight);
-      reportDiv.innerHTML = "";
-      currentLiveAngle = null;
-      extAngle = null;
-      flexAngle = null;
-    }
-    
-    async function processFrame() {
-      if (liveVideo.paused || liveVideo.ended) return;
-      liveCtx.drawImage(liveVideo, 0, 0, liveWidth, liveHeight);
-      await pose.send({ image: liveVideo });
-      requestAnimationFrame(processFrame);
-    }
-    
-    function onResults(results) {
-      liveCtx.clearRect(0, 0, liveWidth, liveHeight);
-      liveCtx.drawImage(results.image, 0, 0, liveWidth, liveHeight);
+    poseExtension.onResults(onResultsExtension);
+
+    const poseFlexion = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    poseFlexion.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+    poseFlexion.onResults(onResultsFlexion);
+
+    // Process Extension Image Upload
+    document.getElementById('extensionInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = () => {
+        if (img.width > maxWidth) {
+          const scale = maxWidth / img.width;
+          extImgWidth = img.width * scale;
+          extImgHeight = img.height * scale;
+        } else {
+          extImgWidth = img.width;
+          extImgHeight = img.height;
+        }
+        canvasExtension.width = extImgWidth;
+        canvasExtension.height = extImgHeight;
+        ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        poseExtension.send({ image: img });
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Process Flexion Image Upload
+    document.getElementById('flexionInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = () => {
+        if (img.width > maxWidth) {
+          const scale = maxWidth / img.width;
+          flexImgWidth = img.width * scale;
+          flexImgHeight = img.height * scale;
+        } else {
+          flexImgWidth = img.width;
+          flexImgHeight = img.height;
+        }
+        canvasFlexion.width = flexImgWidth;
+        canvasFlexion.height = flexImgHeight;
+        ctxFlexion.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
+        poseFlexion.send({ image: img });
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Callback for processing the extension image
+    function onResultsExtension(results) {
+      ctxExtension.clearRect(0, 0, extImgWidth, extImgHeight);
+      ctxExtension.drawImage(results.image, 0, 0, extImgWidth, extImgHeight);
       if (results.poseLandmarks) {
-        // Draw connectors with white lines
-        window.drawConnectors(liveCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-        // Manually draw landmarks as red circles with radius 4
-        results.poseLandmarks.forEach(landmark => {
-          const pt = toPixel(landmark, liveWidth, liveHeight);
-          liveCtx.beginPath();
-          liveCtx.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
-          liveCtx.fillStyle = '#FF0000';
-          liveCtx.fill();
-        });
+        // Draw white connectors between landmarks with increased line width
+        window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 4 });
+        // Draw red landmarks with a smaller radius (2)
+        window.drawLandmarks(ctxExtension, results.poseLandmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
         const landmarks = results.poseLandmarks;
-        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], liveWidth, liveHeight);
-        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], liveWidth, liveHeight);
-        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], liveWidth, liveHeight);
-        currentLiveAngle = calculateAngle(shoulder, elbow, wrist);
-        liveCtx.font = "20px Arial";
-        liveCtx.fillStyle = "white";
-        liveCtx.fillText(`Visible (Left) Elbow: ${currentLiveAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
-        reportDiv.innerHTML = `<h3>Live Elbow Measurement</h3>
-                               <p>Current Visible Elbow (Left): ${currentLiveAngle.toFixed(2)}°</p>`;
+        // For the visible left elbow, use the right side landmarks (mirror effect correction)
+        const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], extImgWidth, extImgHeight);
+        const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], extImgWidth, extImgHeight);
+        const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], extImgWidth, extImgHeight);
+        extAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
+        ctxExtension.font = "20px Arial";
+        ctxExtension.fillStyle = "white";
+        ctxExtension.fillText(`Visible (Left) Elbow: ${extAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
+        updateReport();
       } else {
-        reportDiv.innerHTML = `<p>No pose detected.</p>`;
+        console.log("No pose detected in extension image.");
       }
     }
-    
-    function captureExtension() {
-      if (currentLiveAngle !== null) {
-        extAngle = currentLiveAngle;
-        reportDiv.innerHTML += `<p>Extension captured: ${extAngle.toFixed(2)}°</p>`;
-        updateFinalReport();
+
+    // Callback for processing the flexion image
+    function onResultsFlexion(results) {
+      ctxFlexion.clearRect(0, 0, flexImgWidth, flexImgHeight);
+      ctxFlexion.drawImage(results.image, 0, 0, flexImgWidth, flexImgHeight);
+      if (results.poseLandmarks) {
+        window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 4 });
+        window.drawLandmarks(ctxFlexion, results.poseLandmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
+        const landmarks = results.poseLandmarks;
+        const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], flexImgWidth, flexImgHeight);
+        const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], flexImgWidth, flexImgHeight);
+        const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], flexImgWidth, flexImgHeight);
+        flexAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
+        ctxFlexion.font = "20px Arial";
+        ctxFlexion.fillStyle = "white";
+        ctxFlexion.fillText(`Visible (Left) Elbow: ${flexAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
+        updateReport();
+      } else {
+        console.log("No pose detected in flexion image.");
       }
     }
-    
-    function captureFlexion() {
-      if (currentLiveAngle !== null) {
-        flexAngle = currentLiveAngle;
-        reportDiv.innerHTML += `<p>Flexion captured: ${flexAngle.toFixed(2)}°</p>`;
-        updateFinalReport();
-      }
-    }
-    
-    function updateFinalReport() {
+
+    // Update the report when both images have been processed
+    function updateReport() {
       if (extAngle !== null && flexAngle !== null) {
         const rom = Math.abs(extAngle - flexAngle);
-        reportDiv.innerHTML += `<hr>
+        const reportHTML = `
           <h3>Elbow Range of Motion Report</h3>
-          <p>Visible Elbow: <strong>Left Elbow</strong></p>
-          <p><strong>Extension Angle:</strong> ${extAngle.toFixed(2)}°</p>
-          <p><strong>Flexion Angle:</strong> ${flexAngle.toFixed(2)}°</p>
-          <p><strong>Range of Motion (ROM):</strong> ${rom.toFixed(2)}°</p>
-          <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>`;
+          <p>Visible elbow: <strong>Left Elbow</strong></p>
+          <p><strong>Range of Motion:</strong> ${rom.toFixed(2)}°</p>
+          <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>
+        `;
+        reportDiv.innerHTML = reportHTML;
       }
     }
-    
-    document.getElementById('startLive').addEventListener('click', startLive);
-    document.getElementById('captureExtension').addEventListener('click', captureExtension);
-    document.getElementById('captureFlexion').addEventListener('click', captureFlexion);
-    document.getElementById('stopLive').addEventListener('click', stopLive);
   </script>
 </body>
 </html>
