@@ -53,19 +53,17 @@
     canvas {
       background-color: #fff;
       border: 1px solid #ccc;
-      max-width: 100%;
+      width: 32%;
       height: auto;
     }
     #report {
-      margin-top: 30px;
+      margin: 20px auto;
       padding: 15px;
       background: #fff;
       border: 1px solid #ccc;
       max-width: 600px;
-      margin-left: auto;
-      margin-right: auto;
       text-align: left;
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1.5;
     }
   </style>
@@ -92,45 +90,41 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script>
-    // Global variables for extension image processing
-    let extAngle = null;  // We'll use one angle value from the visible left elbow
-    let extImgWidth = 0, extImgHeight = 0;
-    // Global variables for flexion image processing
-    let flexAngle = null;
-    let flexImgWidth = 0, flexImgHeight = 0;
-    const maxWidth = 600; // maximum display width
-
-    // Get canvas and report elements
+    // Global settings
+    const maxWidth = 600;
+    
+    // Variables for extension image
+    let extImgWidth = 0, extImgHeight = 0, extAngle = null;
+    // Variables for flexion image
+    let flexImgWidth = 0, flexImgHeight = 0, flexAngle = null;
+    
+    // Canvas elements and contexts
     const canvasExtension = document.getElementById('canvas_extension');
     const ctxExtension = canvasExtension.getContext('2d');
     const canvasFlexion = document.getElementById('canvas_flexion');
     const ctxFlexion = canvasFlexion.getContext('2d');
     const reportDiv = document.getElementById('report');
-
-    // Define landmark indices from Mediapipe Pose (using PoseLandmark values)
-    const PoseLandmark = {
-      LEFT_SHOULDER: { value: 11 },
-      LEFT_ELBOW: { value: 13 },
-      LEFT_WRIST: { value: 15 },
-      RIGHT_SHOULDER: { value: 12 },
-      RIGHT_ELBOW: { value: 14 },
-      RIGHT_WRIST: { value: 16 }
-    };
-
-    // Helper: Calculate angle between three points (in degrees)
+    
+    // For mirror correction: visible left elbow comes from right-side landmarks.
+    // (MediaPipe Pose landmark indices for right shoulder, elbow, wrist)
+    const RIGHT_SHOULDER_IDX = 12;
+    const RIGHT_ELBOW_IDX = 14;
+    const RIGHT_WRIST_IDX = 16;
+    
+    // Helper function to calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let angle = Math.abs(radians * 180.0 / Math.PI);
       if (angle > 180) angle = 360 - angle;
       return angle;
     }
-
-    // Helper: Convert normalized landmark to pixel coordinates for given width/height
+    
+    // Helper function to convert normalized landmark to pixel coordinates
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
-
-    // Create two MediaPipe Pose instances for extension and flexion images
+    
+    // Initialize Mediapipe Pose for extension image processing
     const poseExtension = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -141,7 +135,8 @@
       minTrackingConfidence: 0.7
     });
     poseExtension.onResults(onResultsExtension);
-
+    
+    // Initialize Mediapipe Pose for flexion image processing
     const poseFlexion = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -152,8 +147,8 @@
       minTrackingConfidence: 0.7
     });
     poseFlexion.onResults(onResultsFlexion);
-
-    // Process Extension Image Upload
+    
+    // Process extension image upload
     document.getElementById('extensionInput').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -170,12 +165,13 @@
         canvasExtension.width = extImgWidth;
         canvasExtension.height = extImgHeight;
         ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        // Process the image with MediaPipe Pose
         poseExtension.send({ image: img });
       };
       img.src = URL.createObjectURL(file);
     });
-
-    // Process Flexion Image Upload
+    
+    // Process flexion image upload
     document.getElementById('flexionInput').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -192,67 +188,81 @@
         canvasFlexion.width = flexImgWidth;
         canvasFlexion.height = flexImgHeight;
         ctxFlexion.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
+        // Process the image with MediaPipe Pose
         poseFlexion.send({ image: img });
       };
       img.src = URL.createObjectURL(file);
     });
-
-    // Callback for processing the extension image
+    
+    // Callback for extension image results
     function onResultsExtension(results) {
       ctxExtension.clearRect(0, 0, extImgWidth, extImgHeight);
       ctxExtension.drawImage(results.image, 0, 0, extImgWidth, extImgHeight);
       if (results.poseLandmarks) {
-        // Draw white connectors between landmarks with increased line width
-        window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 4 });
-        // Draw red landmarks with a smaller radius (2)
-        window.drawLandmarks(ctxExtension, results.poseLandmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
+        // Draw connectors (white lines)
+        window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
+        // Draw landmarks manually: loop through each landmark and draw a red circle
+        results.poseLandmarks.forEach(landmark => {
+          const pt = toPixel(landmark, extImgWidth, extImgHeight);
+          ctxExtension.beginPath();
+          ctxExtension.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
+          ctxExtension.fillStyle = '#FF0000';
+          ctxExtension.fill();
+        });
         const landmarks = results.poseLandmarks;
-        // For the visible left elbow, use the right side landmarks (mirror effect correction)
-        const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], extImgWidth, extImgHeight);
-        const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], extImgWidth, extImgHeight);
-        const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], extImgWidth, extImgHeight);
-        extAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
+        // For the visible left elbow, use the right-side landmarks (mirror correction)
+        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], extImgWidth, extImgHeight);
+        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], extImgWidth, extImgHeight);
+        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], extImgWidth, extImgHeight);
+        extAngle = calculateAngle(shoulder, elbow, wrist);
         ctxExtension.font = "20px Arial";
         ctxExtension.fillStyle = "white";
-        ctxExtension.fillText(`Visible (Left) Elbow: ${extAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
+        ctxExtension.fillText(`Left Elbow: ${extAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
         updateReport();
       } else {
         console.log("No pose detected in extension image.");
       }
     }
-
-    // Callback for processing the flexion image
+    
+    // Callback for flexion image results
     function onResultsFlexion(results) {
       ctxFlexion.clearRect(0, 0, flexImgWidth, flexImgHeight);
       ctxFlexion.drawImage(results.image, 0, 0, flexImgWidth, flexImgHeight);
       if (results.poseLandmarks) {
-        window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 4 });
-        window.drawLandmarks(ctxFlexion, results.poseLandmarks, { color: '#FF0000', lineWidth: 1, radius: 2 });
+        window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
+        results.poseLandmarks.forEach(landmark => {
+          const pt = toPixel(landmark, flexImgWidth, flexImgHeight);
+          ctxFlexion.beginPath();
+          ctxFlexion.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
+          ctxFlexion.fillStyle = '#FF0000';
+          ctxFlexion.fill();
+        });
         const landmarks = results.poseLandmarks;
-        const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], flexImgWidth, flexImgHeight);
-        const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], flexImgWidth, flexImgHeight);
-        const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], flexImgWidth, flexImgHeight);
-        flexAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
+        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], flexImgWidth, flexImgHeight);
+        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], flexImgWidth, flexImgHeight);
+        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], flexImgWidth, flexImgHeight);
+        flexAngle = calculateAngle(shoulder, elbow, wrist);
         ctxFlexion.font = "20px Arial";
         ctxFlexion.fillStyle = "white";
-        ctxFlexion.fillText(`Visible (Left) Elbow: ${flexAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
+        ctxFlexion.fillText(`Left Elbow: ${flexAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
         updateReport();
       } else {
         console.log("No pose detected in flexion image.");
       }
     }
-
-    // Update the report when both images have been processed
+    
+    // Update report if both extension and flexion angles are available
     function updateReport() {
       if (extAngle !== null && flexAngle !== null) {
         const rom = Math.abs(extAngle - flexAngle);
-        const reportHTML = `
+        reportDiv.innerHTML = `
           <h3>Elbow Range of Motion Report</h3>
-          <p>Visible elbow: <strong>Left Elbow</strong></p>
-          <p><strong>Range of Motion:</strong> ${rom.toFixed(2)}°</p>
+          <p>Visible Elbow: <strong>Left Elbow</strong></p>
+          <p><strong>Extension Angle:</strong> ${extAngle.toFixed(2)}°</p>
+          <p><strong>Flexion Angle:</strong> ${flexAngle.toFixed(2)}°</p>
+          <p><strong>Range of Motion (ROM):</strong> ${rom.toFixed(2)}°</p>
           <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>
         `;
-        reportDiv.innerHTML = reportHTML;
       }
     }
   </script>
