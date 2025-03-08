@@ -6,7 +6,7 @@
   <style>
     body {
       margin: 0;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: Arial, sans-serif;
       background-color: #f2f2f2;
       text-align: center;
       color: #333;
@@ -14,19 +14,16 @@
     header {
       background-color: #003366;
       color: #fff;
-      padding: 35px;
-      font-size: 48px;
+      padding: 20px;
+      font-size: 36px;
       font-weight: bold;
     }
-    #liveControls {
+    #controls {
       margin: 20px 0;
-      display: flex;
-      justify-content: center;
-      gap: 10px;
-      flex-wrap: wrap;
     }
-    #liveControls button {
-      padding: 10px 20px;
+    #controls button {
+      margin: 5px;
+      padding: 10px 15px;
       font-size: 16px;
       background-color: #003366;
       color: #fff;
@@ -46,7 +43,7 @@
       width: 640px;
       height: 480px;
       object-fit: cover;
-      transform: scaleX(-1); /* Mirror the video */
+      transform: scaleX(-1); /* Mirror for selfie view */
     }
     #liveCanvas {
       position: absolute;
@@ -54,12 +51,12 @@
       height: 480px;
       pointer-events: none;
     }
-    #liveReport {
+    #report {
       margin-top: 20px;
       padding: 15px;
       background: #fff;
       border: 1px solid #ccc;
-      max-width: 600px;
+      max-width: 640px;
       margin-left: auto;
       margin-right: auto;
       text-align: left;
@@ -70,7 +67,7 @@
 </head>
 <body>
   <header>Elbow Range Live Analysis</header>
-  <div id="liveControls">
+  <div id="controls">
     <button id="startLive">Start Live Measurement</button>
     <button id="captureExtension">Capture Extension</button>
     <button id="captureFlexion">Capture Flexion</button>
@@ -80,35 +77,30 @@
     <video id="liveVideo" autoplay playsinline muted></video>
     <canvas id="liveCanvas"></canvas>
   </div>
-  <div id="liveReport"></div>
-
+  <div id="report"></div>
+  
   <!-- Load Mediapipe Pose and Drawing Utils -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script>
-    // Dimensions
     const liveWidth = 640, liveHeight = 480;
     let liveStream = null;
-    
-    // Global variables to store captured angles and current live angle
+    let currentLiveAngle = null;
     let extAngle = null;
     let flexAngle = null;
-    let currentLiveAngle = null;
     
-    // Get live video, canvas, and report elements
     const liveVideo = document.getElementById('liveVideo');
     const liveCanvas = document.getElementById('liveCanvas');
+    liveCanvas.width = liveWidth;
+    liveCanvas.height = liveHeight;
     const liveCtx = liveCanvas.getContext('2d');
-    const liveReport = document.getElementById('liveReport');
+    const reportDiv = document.getElementById('report');
     
-    // Use RIGHT side landmarks to represent the visible left elbow
-    const PoseLandmark = {
-      RIGHT_SHOULDER: { value: 12 },
-      RIGHT_ELBOW: { value: 14 },
-      RIGHT_WRIST: { value: 16 }
-    };
+    // For mirror-corrected visible left elbow, we use the RIGHT side landmarks:
+    const RIGHT_SHOULDER_IDX = 12;
+    const RIGHT_ELBOW_IDX = 14;
+    const RIGHT_WRIST_IDX = 16;
     
-    // Helper: Calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let angle = Math.abs(radians * 180.0 / Math.PI);
@@ -116,36 +108,33 @@
       return angle;
     }
     
-    // Helper: Convert normalized landmark to pixel coordinates
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
     
-    // Initialize Mediapipe Pose for live measurement
-    const livePose = new Pose({
+    // Initialize Mediapipe Pose
+    const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
-    livePose.setOptions({
+    pose.setOptions({
       modelComplexity: 1,
       smoothLandmarks: true,
       minDetectionConfidence: 0.7,
       minTrackingConfidence: 0.7
     });
-    livePose.onResults(onLiveResults);
+    pose.onResults(onResults);
     
-    // Start live measurement
     async function startLive() {
       try {
         liveStream = await navigator.mediaDevices.getUserMedia({ video: { width: liveWidth, height: liveHeight } });
         liveVideo.srcObject = liveStream;
         liveVideo.play();
-        requestAnimationFrame(processLiveFrame);
+        requestAnimationFrame(processFrame);
       } catch (error) {
         console.error("Error accessing webcam:", error);
       }
     }
     
-    // Stop live measurement
     function stopLive() {
       if (liveStream) {
         liveStream.getTracks().forEach(track => track.stop());
@@ -153,29 +142,26 @@
       liveVideo.pause();
       liveVideo.srcObject = null;
       liveCtx.clearRect(0, 0, liveWidth, liveHeight);
-      liveReport.innerHTML = "";
+      reportDiv.innerHTML = "";
+      currentLiveAngle = null;
       extAngle = null;
       flexAngle = null;
-      currentLiveAngle = null;
     }
     
-    // Process each frame
-    async function processLiveFrame() {
+    async function processFrame() {
       if (liveVideo.paused || liveVideo.ended) return;
       liveCtx.drawImage(liveVideo, 0, 0, liveWidth, liveHeight);
-      await livePose.send({ image: liveVideo });
-      requestAnimationFrame(processLiveFrame);
+      await pose.send({ image: liveVideo });
+      requestAnimationFrame(processFrame);
     }
     
-    // Live pose results callback
-    function onLiveResults(results) {
+    function onResults(results) {
       liveCtx.clearRect(0, 0, liveWidth, liveHeight);
       liveCtx.drawImage(results.image, 0, 0, liveWidth, liveHeight);
       if (results.poseLandmarks) {
         // Draw connectors with white lines
         window.drawConnectors(liveCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-        
-        // Manually draw landmarks as red circles
+        // Manually draw landmarks as red circles with radius 4
         results.poseLandmarks.forEach(landmark => {
           const pt = toPixel(landmark, liveWidth, liveHeight);
           liveCtx.beginPath();
@@ -183,62 +169,50 @@
           liveCtx.fillStyle = '#FF0000';
           liveCtx.fill();
         });
-        
         const landmarks = results.poseLandmarks;
-        // Use right side landmarks for the visible left elbow
-        const visibleLeftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], liveWidth, liveHeight);
-        const visibleLeftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], liveWidth, liveHeight);
-        const visibleLeftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], liveWidth, liveHeight);
-        currentLiveAngle = calculateAngle(visibleLeftShoulder, visibleLeftElbow, visibleLeftWrist);
-        
+        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], liveWidth, liveHeight);
+        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], liveWidth, liveHeight);
+        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], liveWidth, liveHeight);
+        currentLiveAngle = calculateAngle(shoulder, elbow, wrist);
         liveCtx.font = "20px Arial";
         liveCtx.fillStyle = "white";
-        liveCtx.fillText(`Visible (Left) Elbow: ${currentLiveAngle.toFixed(0)}°`, visibleLeftElbow.x, visibleLeftElbow.y - 10);
-        
-        liveReport.innerHTML = `
-          <h3>Live Elbow Measurement</h3>
-          <p>Current Visible Elbow (Left): ${currentLiveAngle.toFixed(2)}°</p>
-        `;
+        liveCtx.fillText(`Visible (Left) Elbow: ${currentLiveAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
+        reportDiv.innerHTML = `<h3>Live Elbow Measurement</h3>
+                               <p>Current Visible Elbow (Left): ${currentLiveAngle.toFixed(2)}°</p>`;
       } else {
-        liveReport.innerHTML = `<p>No pose detected.</p>`;
+        reportDiv.innerHTML = `<p>No pose detected.</p>`;
       }
     }
     
-    // Capture extension angle
     function captureExtension() {
       if (currentLiveAngle !== null) {
         extAngle = currentLiveAngle;
-        liveReport.innerHTML += `<p>Extension captured: ${extAngle.toFixed(2)}°</p>`;
+        reportDiv.innerHTML += `<p>Extension captured: ${extAngle.toFixed(2)}°</p>`;
         updateFinalReport();
       }
     }
     
-    // Capture flexion angle
     function captureFlexion() {
       if (currentLiveAngle !== null) {
         flexAngle = currentLiveAngle;
-        liveReport.innerHTML += `<p>Flexion captured: ${flexAngle.toFixed(2)}°</p>`;
+        reportDiv.innerHTML += `<p>Flexion captured: ${flexAngle.toFixed(2)}°</p>`;
         updateFinalReport();
       }
     }
     
-    // Update final report when both angles are captured
     function updateFinalReport() {
       if (extAngle !== null && flexAngle !== null) {
         const rom = Math.abs(extAngle - flexAngle);
-        liveReport.innerHTML += `
-          <hr>
+        reportDiv.innerHTML += `<hr>
           <h3>Elbow Range of Motion Report</h3>
           <p>Visible Elbow: <strong>Left Elbow</strong></p>
           <p><strong>Extension Angle:</strong> ${extAngle.toFixed(2)}°</p>
           <p><strong>Flexion Angle:</strong> ${flexAngle.toFixed(2)}°</p>
           <p><strong>Range of Motion (ROM):</strong> ${rom.toFixed(2)}°</p>
-          <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>
-        `;
+          <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>`;
       }
     }
     
-    // Attach event listeners
     document.getElementById('startLive').addEventListener('click', startLive);
     document.getElementById('captureExtension').addEventListener('click', captureExtension);
     document.getElementById('captureFlexion').addEventListener('click', captureFlexion);
