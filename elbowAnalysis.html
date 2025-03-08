@@ -2,11 +2,11 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Elbow Range Analysis</title>
+  <title>Elbow Angle Analysis</title>
   <style>
     body {
       margin: 0;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: Arial, sans-serif;
       background-color: #f2f2f2;
       text-align: center;
       color: #333;
@@ -14,16 +14,14 @@
     header {
       background-color: #003366;
       color: #fff;
-      padding: 35px;
-      font-size: 48px;
+      padding: 20px;
+      font-size: 36px;
       font-weight: bold;
     }
     #controls {
-      margin: 20px 0;
+      margin: 20px;
       display: flex;
       justify-content: center;
-      gap: 20px;
-      flex-wrap: wrap;
     }
     .upload-container {
       display: flex;
@@ -45,15 +43,13 @@
     #canvasContainer {
       display: flex;
       justify-content: center;
-      gap: 20px;
-      flex-wrap: wrap;
       margin: 0 auto;
       max-width: 90%;
     }
     canvas {
       background-color: #fff;
       border: 1px solid #ccc;
-      width: 32%;
+      max-width: 100%;
       height: auto;
     }
     #report {
@@ -63,55 +59,52 @@
       border: 1px solid #ccc;
       max-width: 600px;
       text-align: left;
-      font-size: 16px;
+      font-size: 18px;
       line-height: 1.5;
     }
   </style>
 </head>
 <body>
-  <header>Elbow Range Analysis</header>
+  <header>Elbow Angle Analysis</header>
   <div id="controls">
     <div class="upload-container">
-      <label for="extensionInput">Upload Extension Image</label>
-      <input type="file" id="extensionInput" accept="image/*">
-    </div>
-    <div class="upload-container">
-      <label for="flexionInput">Upload Flexion Image</label>
-      <input type="file" id="flexionInput" accept="image/*">
+      <label for="imageInput">Upload Image</label>
+      <input type="file" id="imageInput" accept="image/*">
     </div>
   </div>
   <div id="canvasContainer">
-    <canvas id="canvas_extension"></canvas>
-    <canvas id="canvas_flexion"></canvas>
+    <canvas id="canvas"></canvas>
   </div>
   <div id="report"></div>
 
-  <!-- Load Mediapipe Pose and Drawing Utils -->
+  <!-- Load MediaPipe Pose and Drawing Utils -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script>
-    // Global settings
+    // Maximum display width
     const maxWidth = 600;
     
-    // Variables for extension image
-    let extImgWidth = 0, extImgHeight = 0, extAngle = null;
-    // Variables for flexion image
-    let flexImgWidth = 0, flexImgHeight = 0, flexAngle = null;
+    // We'll use two sets of landmarks:
+    // Left elbow: indices 11, 13, 15
+    // Right elbow: indices 12, 14, 16
+    const LEFT_SHOULDER_IDX = 11;
+    const LEFT_ELBOW_IDX = 13;
+    const LEFT_WRIST_IDX = 15;
     
-    // Canvas elements and contexts
-    const canvasExtension = document.getElementById('canvas_extension');
-    const ctxExtension = canvasExtension.getContext('2d');
-    const canvasFlexion = document.getElementById('canvas_flexion');
-    const ctxFlexion = canvasFlexion.getContext('2d');
-    const reportDiv = document.getElementById('report');
-    
-    // For mirror correction: visible left elbow comes from right-side landmarks.
-    // (MediaPipe Pose landmark indices for right shoulder, elbow, wrist)
     const RIGHT_SHOULDER_IDX = 12;
     const RIGHT_ELBOW_IDX = 14;
     const RIGHT_WRIST_IDX = 16;
     
-    // Helper function to calculate angle between three points (in degrees)
+    // Variables for image dimensions and computed angles
+    let imgWidth = 0, imgHeight = 0;
+    let leftElbowAngle = null, rightElbowAngle = null;
+    
+    // Get canvas and report elements
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const reportDiv = document.getElementById('report');
+    
+    // Helper: Calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let angle = Math.abs(radians * 180.0 / Math.PI);
@@ -119,151 +112,125 @@
       return angle;
     }
     
-    // Helper function to convert normalized landmark to pixel coordinates
+    // Helper: Convert normalized landmark to pixel coordinates
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
     
-    // Initialize Mediapipe Pose for extension image processing
-    const poseExtension = new Pose({
+    // Initialize MediaPipe Pose
+    const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
-    poseExtension.setOptions({
+    pose.setOptions({
       modelComplexity: 1,
       smoothLandmarks: true,
       minDetectionConfidence: 0.7,
       minTrackingConfidence: 0.7
     });
-    poseExtension.onResults(onResultsExtension);
+    pose.onResults(onResults);
     
-    // Initialize Mediapipe Pose for flexion image processing
-    const poseFlexion = new Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-    });
-    poseFlexion.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7
-    });
-    poseFlexion.onResults(onResultsFlexion);
-    
-    // Process extension image upload
-    document.getElementById('extensionInput').addEventListener('change', (e) => {
+    // Process uploaded image
+    document.getElementById('imageInput').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const img = new Image();
       img.onload = () => {
+        // Scale image if necessary
         if (img.width > maxWidth) {
           const scale = maxWidth / img.width;
-          extImgWidth = img.width * scale;
-          extImgHeight = img.height * scale;
+          imgWidth = img.width * scale;
+          imgHeight = img.height * scale;
         } else {
-          extImgWidth = img.width;
-          extImgHeight = img.height;
+          imgWidth = img.width;
+          imgHeight = img.height;
         }
-        canvasExtension.width = extImgWidth;
-        canvasExtension.height = extImgHeight;
-        ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        canvas.width = imgWidth;
+        canvas.height = imgHeight;
+        // Draw original image
+        ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
         // Process the image with MediaPipe Pose
-        poseExtension.send({ image: img });
+        pose.send({ image: img });
       };
       img.src = URL.createObjectURL(file);
     });
     
-    // Process flexion image upload
-    document.getElementById('flexionInput').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const img = new Image();
-      img.onload = () => {
-        if (img.width > maxWidth) {
-          const scale = maxWidth / img.width;
-          flexImgWidth = img.width * scale;
-          flexImgHeight = img.height * scale;
-        } else {
-          flexImgWidth = img.width;
-          flexImgHeight = img.height;
-        }
-        canvasFlexion.width = flexImgWidth;
-        canvasFlexion.height = flexImgHeight;
-        ctxFlexion.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
-        // Process the image with MediaPipe Pose
-        poseFlexion.send({ image: img });
-      };
-      img.src = URL.createObjectURL(file);
-    });
-    
-    // Callback for extension image results
-    function onResultsExtension(results) {
-      ctxExtension.clearRect(0, 0, extImgWidth, extImgHeight);
-      ctxExtension.drawImage(results.image, 0, 0, extImgWidth, extImgHeight);
-      if (results.poseLandmarks) {
-        // Draw connectors (white lines)
-        window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-        // Draw landmarks manually: loop through each landmark and draw a red circle
-        results.poseLandmarks.forEach(landmark => {
-          const pt = toPixel(landmark, extImgWidth, extImgHeight);
-          ctxExtension.beginPath();
-          ctxExtension.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
-          ctxExtension.fillStyle = '#FF0000';
-          ctxExtension.fill();
-        });
-        const landmarks = results.poseLandmarks;
-        // For the visible left elbow, use the right-side landmarks (mirror correction)
-        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], extImgWidth, extImgHeight);
-        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], extImgWidth, extImgHeight);
-        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], extImgWidth, extImgHeight);
-        extAngle = calculateAngle(shoulder, elbow, wrist);
-        ctxExtension.font = "20px Arial";
-        ctxExtension.fillStyle = "white";
-        ctxExtension.fillText(`Left Elbow: ${extAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
-        updateReport();
-      } else {
-        console.log("No pose detected in extension image.");
+    // onResults callback from MediaPipe Pose
+    function onResults(results) {
+      // Clear the canvas and redraw the image
+      ctx.clearRect(0, 0, imgWidth, imgHeight);
+      ctx.drawImage(results.image, 0, 0, imgWidth, imgHeight);
+      if (!results.poseLandmarks) {
+        reportDiv.innerHTML = "<p>No pose detected.</p>";
+        return;
       }
+      
+      const landmarks = results.poseLandmarks;
+      
+      // For the left elbow measurement (using landmarks 11, 13, 15)
+      const leftShoulder = toPixel(landmarks[LEFT_SHOULDER_IDX], imgWidth, imgHeight);
+      const leftElbow = toPixel(landmarks[LEFT_ELBOW_IDX], imgWidth, imgHeight);
+      const leftWrist = toPixel(landmarks[LEFT_WRIST_IDX], imgWidth, imgHeight);
+      leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+      
+      // For the right elbow measurement (using landmarks 12, 14, 16)
+      const rightShoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], imgWidth, imgHeight);
+      const rightElbow = toPixel(landmarks[RIGHT_ELBOW_IDX], imgWidth, imgHeight);
+      const rightWrist = toPixel(landmarks[RIGHT_WRIST_IDX], imgWidth, imgHeight);
+      rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+      
+      // Draw connectors and landmarks manually for left elbow (blue lines)
+      ctx.beginPath();
+      ctx.moveTo(leftShoulder.x, leftShoulder.y);
+      ctx.lineTo(leftElbow.x, leftElbow.y);
+      ctx.lineTo(leftWrist.x, leftWrist.y);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      // Draw red circles for left landmarks
+      [leftShoulder, leftElbow, leftWrist].forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
+        ctx.fillStyle = '#FF0000';
+        ctx.fill();
+      });
+      ctx.font = "20px Arial";
+      ctx.fillStyle = "white";
+      ctx.fillText(`Angle: ${leftElbowAngle.toFixed(0)}°`, leftElbow.x, leftElbow.y - 10);
+      
+      // Draw connectors and landmarks manually for right elbow (yellow lines)
+      ctx.beginPath();
+      ctx.moveTo(rightShoulder.x, rightShoulder.y);
+      ctx.lineTo(rightElbow.x, rightElbow.y);
+      ctx.lineTo(rightWrist.x, rightWrist.y);
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+      // Draw blue circles for right landmarks
+      [rightShoulder, rightElbow, rightWrist].forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
+        ctx.fillStyle = '#0000FF';
+        ctx.fill();
+      });
+      ctx.font = "20px Arial";
+      ctx.fillStyle = "black";
+      ctx.fillText(`Angle: ${rightElbowAngle.toFixed(0)}°`, rightElbow.x, rightElbow.y - 10);
+      
+      // Update the report below the image
+      updateReport();
     }
     
-    // Callback for flexion image results
-    function onResultsFlexion(results) {
-      ctxFlexion.clearRect(0, 0, flexImgWidth, flexImgHeight);
-      ctxFlexion.drawImage(results.image, 0, 0, flexImgWidth, flexImgHeight);
-      if (results.poseLandmarks) {
-        window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-        results.poseLandmarks.forEach(landmark => {
-          const pt = toPixel(landmark, flexImgWidth, flexImgHeight);
-          ctxFlexion.beginPath();
-          ctxFlexion.arc(pt.x, pt.y, 4, 0, 2 * Math.PI);
-          ctxFlexion.fillStyle = '#FF0000';
-          ctxFlexion.fill();
-        });
-        const landmarks = results.poseLandmarks;
-        const shoulder = toPixel(landmarks[RIGHT_SHOULDER_IDX], flexImgWidth, flexImgHeight);
-        const elbow = toPixel(landmarks[RIGHT_ELBOW_IDX], flexImgWidth, flexImgHeight);
-        const wrist = toPixel(landmarks[RIGHT_WRIST_IDX], flexImgWidth, flexImgHeight);
-        flexAngle = calculateAngle(shoulder, elbow, wrist);
-        ctxFlexion.font = "20px Arial";
-        ctxFlexion.fillStyle = "white";
-        ctxFlexion.fillText(`Left Elbow: ${flexAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
-        updateReport();
-      } else {
-        console.log("No pose detected in flexion image.");
-      }
-    }
-    
-    // Update report if both extension and flexion angles are available
     function updateReport() {
-      if (extAngle !== null && flexAngle !== null) {
-        const rom = Math.abs(extAngle - flexAngle);
-        reportDiv.innerHTML = `
-          <h3>Elbow Range of Motion Report</h3>
-          <p>Visible Elbow: <strong>Left Elbow</strong></p>
-          <p><strong>Extension Angle:</strong> ${extAngle.toFixed(2)}°</p>
-          <p><strong>Flexion Angle:</strong> ${flexAngle.toFixed(2)}°</p>
-          <p><strong>Range of Motion (ROM):</strong> ${rom.toFixed(2)}°</p>
-          <p><strong>Ideal Range:</strong> 0° - 150° (example)</p>
-        `;
+      let reportHTML = "";
+      if (leftElbowAngle !== null) {
+        reportHTML += `<h3>Left Elbow Angle</h3>
+          <p>Angle: ${leftElbowAngle.toFixed(2)}°</p>`;
       }
+      if (rightElbowAngle !== null) {
+        reportHTML += `<h3>Right Elbow Angle</h3>
+          <p>Angle: ${rightElbowAngle.toFixed(2)}°</p>`;
+      }
+      reportDiv.innerHTML = reportHTML;
     }
   </script>
 </body>
