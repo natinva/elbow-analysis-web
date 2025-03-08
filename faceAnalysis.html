@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Yüz Analizi</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f2f2f2;
+      text-align: center;
+      color: #333;
+    }
+    header {
+      background-color: #003366;
+      color: #fff;
+      padding: 35px;
+      font-size: 48px;
+      font-weight: bold;
+    }
+    #controls {
+      margin: 20px 0;
+    }
+    #controls label {
+      cursor: pointer;
+      padding: 10px 20px;
+      background-color: #003366;
+      color: #fff;
+      border-radius: 5px;
+      font-size: 16px;
+    }
+    #imageInput {
+      display: none;
+    }
+    #canvasContainer {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 0 auto;
+      max-width: 90%;
+    }
+    canvas {
+      background-color: #fff;
+      border: 1px solid #ccc;
+      width: 32%;
+      height: auto;
+    }
+    #results {
+      margin: 20px auto;
+      padding: 15px;
+      background: #fff;
+      border: 1px solid #ccc;
+      max-width: 600px;
+      text-align: left;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <header>Yüz Analizi</header>
+  <div id="controls">
+    <label for="imageInput">Resim Yükle</label>
+    <input type="file" id="imageInput" accept="image/*">
+  </div>
+  <div id="canvasContainer">
+    <canvas id="canvas_left"></canvas>
+    <canvas id="canvas_middle"></canvas>
+    <canvas id="canvas_right"></canvas>
+  </div>
+  <div id="results"></div>
+
+  <!-- MediaPipe Face Mesh and Drawing Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script>
+    // Global variables for image dimensions
+    let imgWidth = 0, imgHeight = 0;
+
+    // Get canvas elements and their contexts
+    const canvasLeft = document.getElementById('canvas_left');
+    const ctxLeft = canvasLeft.getContext('2d');
+    const canvasMiddle = document.getElementById('canvas_middle');
+    const ctxMiddle = canvasMiddle.getContext('2d');
+    const canvasRight = document.getElementById('canvas_right');
+    const ctxRight = canvasRight.getContext('2d');
+    const resultsDiv = document.getElementById('results');
+
+    // Landmark indices (as in your Python code)
+    const bottomNoseIdx = 2;
+    const topLipIdx = 13;
+    const bottomLipIdx = 14;
+    const chinIdx = 152;
+    const leftEyeInnerIdx = 133;
+    const rightEyeInnerIdx = 362;
+    const glabellaIdx = 168;
+    const topForeheadIdx = 10;
+    const leftmostFaceIdx = 234;
+    const rightmostFaceIdx = 454;
+    const noseTipIdx = 1;
+    const leftInnerEyebrowIdx = 55;
+    const rightInnerEyebrowIdx = 285;
+    const leftEyeCenterIdx = 468;
+    const rightEyeCenterIdx = 473;
+    const leftEyeOuterIdx = 33;
+    const rightEyeOuterIdx = 263;
+    const leftMouthCornerIdx = 61;
+    const rightMouthCornerIdx = 291;
+    const leftNoseWingIdx = 49;
+    const rightNoseWingIdx = 279;
+
+    // Helper function: convert normalized landmark to pixel coordinates
+    function toPixel(landmark) {
+      return { x: landmark.x * imgWidth, y: landmark.y * imgHeight };
+    }
+
+    // Helper: Euclidean distance
+    function distance(p1, p2) {
+      return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+    }
+
+    // Calculate highest point with a 10% offset above the forehead (landmark topForeheadIdx)
+    function calculateHighestPoint(landmarks) {
+      const topForehead = toPixel(landmarks[topForeheadIdx]);
+      const chin = toPixel(landmarks[chinIdx]);
+      const faceHeight = Math.abs(chin.y - topForehead.y);
+      const offset = faceHeight * 0.1;
+      return { x: topForehead.x, y: Math.max(0, topForehead.y - offset) };
+    }
+
+    // When an image is selected, load and process it
+    document.getElementById('imageInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = () => {
+        // Scale image to a maximum width (600px) for consistency
+        const maxWidth = 600;
+        if (img.width > maxWidth) {
+          const scale = maxWidth / img.width;
+          imgWidth = img.width * scale;
+          imgHeight = img.height * scale;
+        } else {
+          imgWidth = img.width;
+          imgHeight = img.height;
+        }
+        // Set canvas dimensions
+        [canvasLeft, canvasMiddle, canvasRight].forEach(canvas => {
+          canvas.width = imgWidth;
+          canvas.height = imgHeight;
+        });
+        // Draw scaled image on all canvases
+        [ctxLeft, ctxMiddle, ctxRight].forEach(ctx => {
+          ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
+        });
+        // Process image with MediaPipe Face Mesh
+        faceMesh.send({ image: img });
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Initialize MediaPipe Face Mesh
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    faceMesh.setOptions({
+      staticImageMode: true,
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+    faceMesh.onResults(onResults);
+
+    function onResults(results) {
+      // Clear and redraw image on all canvases
+      [ctxLeft, ctxMiddle, ctxRight].forEach(ctx => {
+        ctx.clearRect(0, 0, imgWidth, imgHeight);
+        ctx.drawImage(results.image, 0, 0, imgWidth, imgHeight);
+      });
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        const landmarks = results.multiFaceLandmarks[0];
+
+        // LEFT CANVAS: Draw Nose-Lips-Chin lines and Eye Symmetry lines
+        const bn = toPixel(landmarks[bottomNoseIdx]);
+        const tl = toPixel(landmarks[topLipIdx]);
+        const bl = toPixel(landmarks[bottomLipIdx]);
+        const ch = toPixel(landmarks[chinIdx]);
+        ctxLeft.beginPath();
+        ctxLeft.moveTo(bn.x, bn.y);
+        ctxLeft.lineTo(tl.x, tl.y);
+        ctxLeft.strokeStyle = 'red';
+        ctxLeft.lineWidth = 3;
+        ctxLeft.stroke();
+        ctxLeft.beginPath();
+        ctxLeft.moveTo(bl.x, bl.y);
+        ctxLeft.lineTo(ch.x, ch.y);
+        ctxLeft.strokeStyle = 'red';
+        ctxLeft.lineWidth = 3;
+        ctxLeft.stroke();
+        const leftEye = toPixel(landmarks[leftEyeInnerIdx]);
+        const rightEye = toPixel(landmarks[rightEyeInnerIdx]);
+        const glabella = toPixel(landmarks[glabellaIdx]);
+        ctxLeft.beginPath();
+        ctxLeft.moveTo(leftEye.x, leftEye.y);
+        ctxLeft.lineTo(glabella.x, glabella.y);
+        ctxLeft.strokeStyle = 'green';
+        ctxLeft.lineWidth = 3;
+        ctxLeft.stroke();
+        ctxLeft.beginPath();
+        ctxLeft.moveTo(rightEye.x, rightEye.y);
+        ctxLeft.lineTo(glabella.x, glabella.y);
+        ctxLeft.strokeStyle = 'green';
+        ctxLeft.lineWidth = 3;
+        ctxLeft.stroke();
+
+        // MIDDLE CANVAS: Draw all 468 landmarks as blue dots
+        for (let i = 0; i < landmarks.length; i++) {
+          const pt = toPixel(landmarks[i]);
+          ctxMiddle.beginPath();
+          ctxMiddle.arc(pt.x, pt.y, 1.5, 0, 2 * Math.PI);
+          ctxMiddle.fillStyle = 'blue';
+          ctxMiddle.fill();
+        }
+
+        // RIGHT CANVAS: Draw Jawline and Mouth-to-Nose lines
+        const jawIndices = [234, 93, 132, 58, 172, 136, 150, 176, 148, 152, 377, 400, 379, 365, 397, 288, 361, 454];
+        const jawPoints = jawIndices.map(idx => toPixel(landmarks[idx]));
+        ctxRight.beginPath();
+        ctxRight.moveTo(jawPoints[0].x, jawPoints[0].y);
+        for (let i = 1; i < jawPoints.length; i++) {
+          ctxRight.lineTo(jawPoints[i].x, jawPoints[i].y);
+        }
+        ctxRight.strokeStyle = 'yellow';
+        ctxRight.lineWidth = 2;
+        ctxRight.stroke();
+        ctxRight.beginPath();
+        ctxRight.moveTo(jawPoints[0].x, jawPoints[0].y);
+        ctxRight.lineTo(jawPoints[jawPoints.length - 1].x, jawPoints[jawPoints.length - 1].y);
+        ctxRight.strokeStyle = 'blue';
+        ctxRight.lineWidth = 2;
+        ctxRight.stroke();
+        const leftMouth = toPixel(landmarks[leftMouthCornerIdx]);
+        const rightMouth = toPixel(landmarks[rightMouthCornerIdx]);
+        const leftNose = toPixel(landmarks[leftNoseWingIdx]);
+        const rightNose = toPixel(landmarks[rightNoseWingIdx]);
+        ctxRight.beginPath();
+        ctxRight.moveTo(leftMouth.x, leftMouth.y);
+        ctxRight.lineTo(rightMouth.x, rightMouth.y);
+        ctxRight.strokeStyle = 'orange';
+        ctxRight.lineWidth = 3;
+        ctxRight.stroke();
+        ctxRight.beginPath();
+        ctxRight.moveTo(leftNose.x, leftNose.y);
+        ctxRight.lineTo(rightNose.x, rightNose.y);
+        ctxRight.strokeStyle = 'orange';
+        ctxRight.lineWidth = 3;
+        ctxRight.stroke();
+
+        // CALCULATE RATIO VALUES
+        const noseLipsChinRatio = distance(bn, tl) !== 0 ? distance(bl, ch) / distance(bn, tl) : NaN;
+        const eyeSymmetryRatio = distance(leftEye, glabella) !== 0 ? distance(leftEye, glabella) / distance(rightEye, glabella) : NaN;
+        const faceHeightToWidthRatio = Math.abs(toPixel(landmarks[chinIdx]).y - toPixel(landmarks[topForeheadIdx]).y) / Math.abs(toPixel(landmarks[rightmostFaceIdx]).x - toPixel(landmarks[leftmostFaceIdx]).x);
+        const noseChinForeheadRatio = (function() {
+          const highest = calculateHighestPoint(landmarks);
+          const noseTip = toPixel(landmarks[noseTipIdx]);
+          const chinTip = toPixel(landmarks[chinIdx]);
+          const leftEyebrow = toPixel(landmarks[leftInnerEyebrowIdx]);
+          const rightEyebrow = toPixel(landmarks[rightInnerEyebrowIdx]);
+          const midpoint = { x: (leftEyebrow.x + rightEyebrow.x) / 2, y: (leftEyebrow.y + rightEyebrow.y) / 2 };
+          const C = distance(noseTip, chinTip);
+          const D = distance(highest, midpoint);
+          return D !== 0 ? C / D : NaN;
+        })();
+        const eyePupilToWidthRatio = (function() {
+          const leftCenter = toPixel(landmarks[leftEyeCenterIdx]);
+          const rightCenter = toPixel(landmarks[rightEyeCenterIdx]);
+          const leftInner = toPixel(landmarks[leftEyeInnerIdx]);
+          const leftOuter = toPixel(landmarks[leftEyeOuterIdx]);
+          const rightInner = toPixel(landmarks[rightEyeInnerIdx]);
+          const rightOuter = toPixel(landmarks[rightEyeOuterIdx]);
+          const d = distance(leftCenter, rightCenter);
+          const lw = distance(leftInner, leftOuter);
+          const rw = distance(rightInner, rightOuter);
+          return (lw + rw !== 0 ? d / (lw + rw) : NaN);
+        })();
+        const mouthNoseRatio = (function() {
+          const leftMouth = toPixel(landmarks[leftMouthCornerIdx]);
+          const rightMouth = toPixel(landmarks[rightMouthCornerIdx]);
+          const leftNose = toPixel(landmarks[leftNoseWingIdx]);
+          const rightNose = toPixel(landmarks[rightNoseWingIdx]);
+          const mouthWidth = distance(leftMouth, rightMouth);
+          const noseWidth = distance(leftNose, rightNose);
+          return noseWidth !== 0 ? mouthWidth / noseWidth : NaN;
+        })();
+        const jawlineToFaceWidthRatio = (function() {
+          const jawIndices = [234, 93, 132, 58, 172, 136, 150, 176, 148, 152, 377, 400, 379, 365, 397, 288, 361, 454];
+          const jawPoints = jawIndices.map(idx => toPixel(landmarks[idx]));
+          let jawlineWidth = 0;
+          for (let i = 0; i < jawPoints.length - 1; i++) {
+            jawlineWidth += distance(jawPoints[i], jawPoints[i + 1]);
+          }
+          const faceWidth = distance(jawPoints[0], jawPoints[jawPoints.length - 1]);
+          return faceWidth !== 0 ? jawlineWidth / faceWidth : NaN;
+        })();
+
+        // Define ideal values for each ratio
+        const IDEAL_VALUES = {
+          "Nose-Lips-Chin Ratio": 1.618,
+          "Eye Symmetry Ratio": 1.0,
+          "Face Height-to-Width Ratio": 1.618,
+          "Nose-Chin/Forehead Ratio": 1.618,
+          "Eye Pupil-to-Width Ratio": 1.0,
+          "Mouth/Nose Ratio": 1.618,
+          "Jawline-to-Face Width Ratio": 2.0
+        };
+
+        // Build the report string and calculate deviations
+        let deviations = [];
+        let reportHTML = "<h3>Analiz Raporu</h3>";
+        reportHTML += "<hr>";
+
+        function addReport(label, value, ideal) {
+          const displayValue = isNaN(value) ? 'N/A' : value.toFixed(2);
+          const deviation = !isNaN(value) ? Math.abs((value - ideal) / ideal) * 100 : NaN;
+          if (!isNaN(deviation)) {
+            deviations.push(deviation);
+          }
+          reportHTML += `<p><strong>${label}:</strong> ${displayValue} (Ideal: ${ideal}) - Sapma: ${isNaN(deviation) ? 'N/A' : deviation.toFixed(2) + '%'}</p>`;
+        }
+
+        addReport("Nose-Lips-Chin Ratio", noseLipsChinRatio, IDEAL_VALUES["Nose-Lips-Chin Ratio"]);
+        addReport("Eye Symmetry Ratio", eyeSymmetryRatio, IDEAL_VALUES["Eye Symmetry Ratio"]);
+        addReport("Face Height-to-Width Ratio", faceHeightToWidthRatio, IDEAL_VALUES["Face Height-to-Width Ratio"]);
+        addReport("Nose-Chin/Forehead Ratio", noseChinForeheadRatio, IDEAL_VALUES["Nose-Chin/Forehead Ratio"]);
+        addReport("Eye Pupil-to-Width Ratio", eyePupilToWidthRatio, IDEAL_VALUES["Eye Pupil-to-Width Ratio"]);
+        addReport("Mouth/Nose Ratio", mouthNoseRatio, IDEAL_VALUES["Mouth/Nose Ratio"]);
+        addReport("Jawline-to-Face Width Ratio", jawlineToFaceWidthRatio, IDEAL_VALUES["Jawline-to-Face Width Ratio"]);
+
+        const averageDeviation = deviations.length ? deviations.reduce((sum, d) => sum + d, 0) / deviations.length : NaN;
+        const goldenScore = !isNaN(averageDeviation) ? (100 - averageDeviation).toFixed(2) : 'N/A';
+        reportHTML += "<hr>";
+        reportHTML += `<p><strong>Altın Oran Skoru:</strong> ${goldenScore}%</p>`;
+        resultsDiv.innerHTML = reportHTML;
+
+      } else {
+        resultsDiv.innerHTML = '<p>No face detected.</p>';
+      }
+    }
+  </script>
+</body>
+</html>

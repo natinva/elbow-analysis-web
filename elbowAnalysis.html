@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Elbow Range Analysis</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f2f2f2;
+      text-align: center;
+      color: #333;
+    }
+    header {
+      background-color: #003366;
+      color: #fff;
+      padding: 35px;
+      font-size: 48px;
+      font-weight: bold;
+    }
+    #controls {
+      margin: 20px 0;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .upload-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .upload-container label {
+      cursor: pointer;
+      padding: 10px 20px;
+      background-color: #003366;
+      color: #fff;
+      border-radius: 5px;
+      font-size: 16px;
+      margin-bottom: 5px;
+    }
+    .upload-container input {
+      display: none;
+    }
+    #canvasContainer {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin: 0 auto;
+      max-width: 90%;
+    }
+    canvas {
+      background-color: #fff;
+      border: 1px solid #ccc;
+      max-width: 100%;
+      height: auto;
+    }
+    #report {
+      margin-top: 30px;
+      padding: 15px;
+      background: #fff;
+      border: 1px solid #ccc;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+      text-align: left;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <header>Elbow Range Analysis</header>
+  <div id="controls">
+    <div class="upload-container">
+      <label for="extensionInput">Upload Extension Image</label>
+      <input type="file" id="extensionInput" accept="image/*">
+    </div>
+    <div class="upload-container">
+      <label for="flexionInput">Upload Flexion Image</label>
+      <input type="file" id="flexionInput" accept="image/*">
+    </div>
+  </div>
+  <div id="canvasContainer">
+    <canvas id="canvas_extension"></canvas>
+    <canvas id="canvas_flexion"></canvas>
+  </div>
+  <div id="report"></div>
+
+  <!-- Load Mediapipe Pose and Drawing Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script>
+    // Global variables for extension image processing
+    let extLeftAngle = null, extRightAngle = null;
+    let extImgWidth = 0, extImgHeight = 0;
+    // Global variables for flexion image processing
+    let flexLeftAngle = null, flexRightAngle = null;
+    let flexImgWidth = 0, flexImgHeight = 0;
+    const maxWidth = 600; // maximum display width
+
+    // Get canvas and report elements
+    const canvasExtension = document.getElementById('canvas_extension');
+    const ctxExtension = canvasExtension.getContext('2d');
+    const canvasFlexion = document.getElementById('canvas_flexion');
+    const ctxFlexion = canvasFlexion.getContext('2d');
+    const reportDiv = document.getElementById('report');
+
+    // Define landmark indices from MediaPipe Pose (based on MediaPipe Pose documentation)
+    const PoseLandmark = {
+      LEFT_SHOULDER: { value: 11 },
+      LEFT_ELBOW: { value: 13 },
+      LEFT_WRIST: { value: 15 },
+      RIGHT_SHOULDER: { value: 12 },
+      RIGHT_ELBOW: { value: 14 },
+      RIGHT_WRIST: { value: 16 }
+    };
+
+    // Helper: Calculate angle between three points (a, b, c) in degrees
+    function calculateAngle(a, b, c) {
+      const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+      let angle = Math.abs(radians * 180.0 / Math.PI);
+      if(angle > 180) angle = 360 - angle;
+      return angle;
+    }
+
+    // Helper: Convert normalized landmark to pixel coordinates for given width/height
+    function toPixel(landmark, width, height) {
+      return { x: landmark.x * width, y: landmark.y * height };
+    }
+
+    // Create two instances of MediaPipe Pose for extension and flexion images
+    const poseExtension = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    poseExtension.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+    poseExtension.onResults(onResultsExtension);
+
+    const poseFlexion = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    poseFlexion.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+    poseFlexion.onResults(onResultsFlexion);
+
+    // Process Extension Image Upload
+    document.getElementById('extensionInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if(!file) return;
+      const img = new Image();
+      img.onload = () => {
+        // Scale image to maximum width if necessary
+        if(img.width > maxWidth) {
+          const scale = maxWidth / img.width;
+          extImgWidth = img.width * scale;
+          extImgHeight = img.height * scale;
+        } else {
+          extImgWidth = img.width;
+          extImgHeight = img.height;
+        }
+        canvasExtension.width = extImgWidth;
+        canvasExtension.height = extImgHeight;
+        ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        poseExtension.send({ image: img });
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Process Flexion Image Upload
+    document.getElementById('flexionInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if(!file) return;
+      const img = new Image();
+      img.onload = () => {
+        if(img.width > maxWidth) {
+          const scale = maxWidth / img.width;
+          flexImgWidth = img.width * scale;
+          flexImgHeight = img.height * scale;
+        } else {
+          flexImgWidth = img.width;
+          flexImgHeight = img.height;
+        }
+        canvasFlexion.width = flexImgWidth;
+        canvasFlexion.height = flexImgHeight;
+        ctxFlexion.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
+        poseFlexion.send({ image: img });
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // Callback for processing the extension image
+    function onResultsExtension(results) {
+      ctxExtension.clearRect(0, 0, extImgWidth, extImgHeight);
+      ctxExtension.drawImage(results.image, 0, 0, extImgWidth, extImgHeight);
+      if(results.poseLandmarks) {
+        // Optionally draw connections and landmarks
+        window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
+        window.drawLandmarks(ctxExtension, results.poseLandmarks, { color: '#FF0000', lineWidth: 1 });
+        const landmarks = results.poseLandmarks;
+        // For extension, due to mirror effect:
+        // Right elbow angle is computed from left shoulder, left elbow, left wrist
+        const rightShoulder = toPixel(landmarks[PoseLandmark.LEFT_SHOULDER.value], extImgWidth, extImgHeight);
+        const rightElbow = toPixel(landmarks[PoseLandmark.LEFT_ELBOW.value], extImgWidth, extImgHeight);
+        const rightWrist = toPixel(landmarks[PoseLandmark.LEFT_WRIST.value], extImgWidth, extImgHeight);
+        // Left elbow angle is computed from right shoulder, right elbow, right wrist
+        const leftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], extImgWidth, extImgHeight);
+        const leftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], extImgWidth, extImgHeight);
+        const leftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], extImgWidth, extImgHeight);
+        extRightAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+        extLeftAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+        ctxExtension.font = "20px Arial";
+        ctxExtension.fillStyle = "white";
+        ctxExtension.fillText(`R Elbow: ${extRightAngle.toFixed(0)}°`, rightElbow.x, rightElbow.y - 10);
+        ctxExtension.fillText(`L Elbow: ${extLeftAngle.toFixed(0)}°`, leftElbow.x, leftElbow.y - 10);
+        updateReport();
+      } else {
+        console.log("No pose detected in extension image.");
+      }
+    }
+
+    // Callback for processing the flexion image
+    function onResultsFlexion(results) {
+      ctxFlexion.clearRect(0, 0, flexImgWidth, flexImgHeight);
+      ctxFlexion.drawImage(results.image, 0, 0, flexImgWidth, flexImgHeight);
+      if(results.poseLandmarks) {
+        window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
+        window.drawLandmarks(ctxFlexion, results.poseLandmarks, { color: '#FF0000', lineWidth: 1 });
+        const landmarks = results.poseLandmarks;
+        const rightShoulder = toPixel(landmarks[PoseLandmark.LEFT_SHOULDER.value], flexImgWidth, flexImgHeight);
+        const rightElbow = toPixel(landmarks[PoseLandmark.LEFT_ELBOW.value], flexImgWidth, flexImgHeight);
+        const rightWrist = toPixel(landmarks[PoseLandmark.LEFT_WRIST.value], flexImgWidth, flexImgHeight);
+        const leftShoulder = toPixel(landmarks[PoseLandmark.RIGHT_SHOULDER.value], flexImgWidth, flexImgHeight);
+        const leftElbow = toPixel(landmarks[PoseLandmark.RIGHT_ELBOW.value], flexImgWidth, flexImgHeight);
+        const leftWrist = toPixel(landmarks[PoseLandmark.RIGHT_WRIST.value], flexImgWidth, flexImgHeight);
+        flexRightAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
+        flexLeftAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
+        ctxFlexion.font = "20px Arial";
+        ctxFlexion.fillStyle = "white";
+        ctxFlexion.fillText(`R Elbow: ${flexRightAngle.toFixed(0)}°`, rightElbow.x, rightElbow.y - 10);
+        ctxFlexion.fillText(`L Elbow: ${flexLeftAngle.toFixed(0)}°`, leftElbow.x, leftElbow.y - 10);
+        updateReport();
+      } else {
+        console.log("No pose detected in flexion image.");
+      }
+    }
+
+    // When both extension and flexion images have been processed, update the report
+    function updateReport() {
+      if(extLeftAngle !== null && extRightAngle !== null && flexLeftAngle !== null && flexRightAngle !== null) {
+        const leftROM = Math.abs(extLeftAngle - flexLeftAngle);
+        const rightROM = Math.abs(extRightAngle - flexRightAngle);
+        const reportHTML = `
+          <h3>Elbow Range of Motion Report</h3>
+          <p><strong>Left Elbow ROM:</strong> ${leftROM.toFixed(2)}°</p>
+          <p><strong>Right Elbow ROM:</strong> ${rightROM.toFixed(2)}°</p>
+          <p><strong>The standard values for Active ROM movements in the elbow are:</strong> Flexion: 140°-150° Extension: 0°-10° </p>
+        `;
+        reportDiv.innerHTML = reportHTML;
+      }
+    }
+  </script>
+</body>
+</html>
