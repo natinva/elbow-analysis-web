@@ -90,30 +90,32 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script>
-    // Maximum width to display images
+    // Maximum width for scaling images
     const maxWidth = 600;
-
-    // Determine if we are on a mobile device
+    
+    // Detect if we are on a mobile device
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-    // For mobile (captured images are mirrored) we use left-side landmarks;
-    // for non-mobile, we assume images need to be flipped and so we use right-side landmarks.
-    const SHOULDER_IDX = isMobile ? 11 : 12;
-    const ELBOW_IDX = isMobile ? 13 : 14;
-    const WRIST_IDX = isMobile ? 15 : 16;
-
+    
+    // Landmark indices selection:
+    // If on mobile (images are captured with mirror effect), then use right‑side landmarks
+    // so that the visible left elbow is measured correctly.
+    // Otherwise, use left‑side landmarks.
+    const SHOULDER_IDX = isMobile ? 12 : 11;
+    const ELBOW_IDX    = isMobile ? 14 : 13;
+    const WRIST_IDX    = isMobile ? 16 : 15;
+    
     // Variables for extension image
     let extImgWidth = 0, extImgHeight = 0, extAngle = null;
     // Variables for flexion image
     let flexImgWidth = 0, flexImgHeight = 0, flexAngle = null;
-
+    
     // Get canvas elements and report area
     const canvasExtension = document.getElementById('canvas_extension');
     const ctxExtension = canvasExtension.getContext('2d');
     const canvasFlexion = document.getElementById('canvas_flexion');
     const ctxFlexion = canvasFlexion.getContext('2d');
     const reportDiv = document.getElementById('report');
-
+    
     // Helper: Calculate angle between three points (in degrees)
     function calculateAngle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
@@ -121,12 +123,12 @@
       if (angle > 180) angle = 360 - angle;
       return angle;
     }
-
+    
     // Helper: Convert normalized landmark to pixel coordinates
     function toPixel(landmark, width, height) {
       return { x: landmark.x * width, y: landmark.y * height };
     }
-
+    
     // Initialize Mediapipe Pose
     const pose = new Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -138,13 +140,14 @@
       minTrackingConfidence: 0.7
     });
     pose.onResults(onResults);
-
+    
     // Process Extension Image Upload
     document.getElementById('extensionInput').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const img = new Image();
       img.onload = () => {
+        // Scale image if necessary
         if (img.width > maxWidth) {
           const scale = maxWidth / img.width;
           extImgWidth = img.width * scale;
@@ -156,11 +159,12 @@
         canvasExtension.width = extImgWidth;
         canvasExtension.height = extImgHeight;
         ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        // Process the image with Mediapipe Pose
         pose.send({ image: img });
       };
       img.src = URL.createObjectURL(file);
     });
-
+    
     // Process Flexion Image Upload
     document.getElementById('flexionInput').addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -182,16 +186,17 @@
       };
       img.src = URL.createObjectURL(file);
     });
-
-    // Callback for processing results (used for both images)
+    
+    // Callback for processing results (applies to both images)
     function onResults(results) {
-      // Determine which canvas to use based on image width
+      // Determine which canvas to use by matching the processed image dimensions
       if (results.image.width === extImgWidth) {
+        // Extension image processing
         ctxExtension.clearRect(0, 0, extImgWidth, extImgHeight);
         ctxExtension.drawImage(results.image, 0, 0, extImgWidth, extImgHeight);
-        // Draw connectors with white lines
+        // Draw white connectors with line width 6
         window.drawConnectors(ctxExtension, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
-        // Manually draw landmarks as red circles
+        // Draw landmarks manually: iterate over all landmarks and draw red circles with radius 4
         results.poseLandmarks.forEach(landmark => {
           const pt = toPixel(landmark, extImgWidth, extImgHeight);
           ctxExtension.beginPath();
@@ -200,7 +205,7 @@
           ctxExtension.fill();
         });
         const landmarks = results.poseLandmarks;
-        // Use selected landmarks (based on device)
+        // For the extension image, use the selected indices
         const shoulder = toPixel(landmarks[SHOULDER_IDX], extImgWidth, extImgHeight);
         const elbow = toPixel(landmarks[ELBOW_IDX], extImgWidth, extImgHeight);
         const wrist = toPixel(landmarks[WRIST_IDX], extImgWidth, extImgHeight);
@@ -210,6 +215,7 @@
         ctxExtension.fillText(`Left Elbow: ${extAngle.toFixed(0)}°`, elbow.x, elbow.y - 10);
         updateReport();
       } else if (results.image.width === flexImgWidth) {
+        // Flexion image processing
         ctxFlexion.clearRect(0, 0, flexImgWidth, flexImgHeight);
         ctxFlexion.drawImage(results.image, 0, 0, flexImgWidth, flexImgHeight);
         window.drawConnectors(ctxFlexion, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: '#ffffff', lineWidth: 6 });
@@ -231,8 +237,8 @@
         updateReport();
       }
     }
-
-    // Update the report when both extension and flexion angles are available
+    
+    // Update the final report when both extension and flexion angles are available
     function updateReport() {
       if (extAngle !== null && flexAngle !== null) {
         const rom = Math.abs(extAngle - flexAngle);
@@ -246,70 +252,6 @@
         `;
       }
     }
-    
-    // Attach event listeners for file uploads
-    document.getElementById('extensionInput').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const img = new Image();
-      img.onload = () => {
-        if (img.width > maxWidth) {
-          const scale = maxWidth / img.width;
-          extImgWidth = img.width * scale;
-          extImgHeight = img.height * scale;
-        } else {
-          extImgWidth = img.width;
-          extImgHeight = img.height;
-        }
-        canvasExtension.width = extImgWidth;
-        canvasExtension.height = extImgHeight;
-        ctxExtension.drawImage(img, 0, 0, extImgWidth, extImgHeight);
-        pose.send({ image: img });
-      };
-      img.src = URL.createObjectURL(file);
-    });
-    
-    document.getElementById('flexionInput').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const img = new Image();
-      img.onload = () => {
-        if (img.width > maxWidth) {
-          const scale = maxWidth / img.width;
-          flexImgWidth = img.width * scale;
-          flexImgHeight = img.height * scale;
-        } else {
-          flexImgWidth = img.width;
-          flexImgHeight = img.height;
-        }
-        canvasFlexion.width = flexImgWidth;
-        canvasFlexion.height = flexImgHeight;
-        ctxFlexion.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
-        pose.send({ image: img });
-      };
-      img.src = URL.createObjectURL(file);
-    });
-    
-    // Functions to capture extension and flexion angles
-    function captureExtension() {
-      if (extAngle !== null) {
-        reportDiv.innerHTML += `<p>Extension captured: ${extAngle.toFixed(2)}°</p>`;
-        updateReport();
-      }
-    }
-    
-    function captureFlexion() {
-      if (flexAngle !== null) {
-        reportDiv.innerHTML += `<p>Flexion captured: ${flexAngle.toFixed(2)}°</p>`;
-        updateReport();
-      }
-    }
-    
-    // Attach event listeners for capture buttons (if using additional buttons)
-    // (Assuming you want to use buttons outside the file uploads)
-    // For example:
-    // document.getElementById('captureExtension').addEventListener('click', captureExtension);
-    // document.getElementById('captureFlexion').addEventListener('click', captureFlexion);
   </script>
 </body>
 </html>
