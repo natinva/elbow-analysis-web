@@ -247,14 +247,18 @@
       updateCombinedReport();
     });
 
-    // Update combined report with ROM for both sides if measurements are available from both sections
+    // Update combined report with only the elbow ROM (the larger one)
     function updateCombinedReport() {
       if (extLeftAngle !== null && flexLeftAngle !== null && extRightAngle !== null && flexRightAngle !== null) {
         const leftROM = Math.abs(extLeftAngle - flexLeftAngle);
         const rightROM = Math.abs(extRightAngle - flexRightAngle);
-        combinedReportDiv.innerHTML = `<h3>Combined ROM Report</h3>
-                                       <p>Left Elbow ROM: ${leftROM.toFixed(2)}°</p>
-                                       <p>Right Elbow ROM: ${rightROM.toFixed(2)}°</p>`;
+        if (leftROM >= rightROM) {
+          combinedReportDiv.innerHTML = `<h3>Combined ROM Report</h3>
+                                         <p>Left Elbow ROM: ${leftROM.toFixed(2)}°</p>`;
+        } else {
+          combinedReportDiv.innerHTML = `<h3>Combined ROM Report</h3>
+                                         <p>Right Elbow ROM: ${rightROM.toFixed(2)}°</p>`;
+        }
       }
     }
 
@@ -275,7 +279,17 @@
         extCanvas.width = extImgWidth;
         extCanvas.height = extImgHeight;
         extCtx.drawImage(img, 0, 0, extImgWidth, extImgHeight);
-        await poseExt.send({ image: img });
+        try {
+          await poseExt.send({ image: img });
+        } catch (error) {
+          console.error("Error processing extension image:", error);
+          extReportDiv.innerHTML = `<p>Error processing image.</p>`;
+        }
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = () => {
+        console.error("Failed to load extension image.");
+        extReportDiv.innerHTML = "<p>Error loading image.</p>";
       };
       img.src = URL.createObjectURL(file);
     });
@@ -297,7 +311,17 @@
         flexCanvas.width = flexImgWidth;
         flexCanvas.height = flexImgHeight;
         flexCtx.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
-        await poseFlex.send({ image: img });
+        try {
+          await poseFlex.send({ image: img });
+        } catch (error) {
+          console.error("Error processing flexion image:", error);
+          flexReportDiv.innerHTML = `<p>Error processing image.</p>`;
+        }
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = () => {
+        console.error("Failed to load flexion image.");
+        flexReportDiv.innerHTML = "<p>Error loading image.</p>";
       };
       img.src = URL.createObjectURL(file);
     });
