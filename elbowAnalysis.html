@@ -183,7 +183,7 @@
         extReportDiv.innerHTML = "<p>No pose detected.</p>";
         return;
       }
-      // Draw connectors and landmarks (all white lines, all red dots)
+      // Draw connectors and landmarks (white lines, red dots)
       window.drawConnectors(extCtx, results.poseLandmarks, Pose.POSE_CONNECTIONS, { color: "#ffffff", lineWidth: 6 });
       window.drawLandmarks(extCtx, results.poseLandmarks, { color: "#FF0000", lineWidth: 1, radius: 4 });
 
@@ -262,30 +262,43 @@
       }
     }
 
-    // Process Extension Image Upload
+    // Process Extension Image Upload with image reduction
     document.getElementById("extInput").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const img = new Image();
-      img.onload = async () => {
-        if (img.width > maxWidth) {
-          const scale = maxWidth / img.width;
-          extImgWidth = img.width * scale;
-          extImgHeight = img.height * scale;
-        } else {
-          extImgWidth = img.width;
-          extImgHeight = img.height;
-        }
-        extCanvas.width = extImgWidth;
-        extCanvas.height = extImgHeight;
-        extCtx.drawImage(img, 0, 0, extImgWidth, extImgHeight);
-        try {
-          await poseExt.send({ image: img });
-        } catch (error) {
-          console.error("Error processing extension image:", error);
-          extReportDiv.innerHTML = `<p>Error processing image.</p>`;
-        }
-        URL.revokeObjectURL(img.src);
+      img.onload = () => {
+        // Determine scale factor based on maxWidth
+        let scale = (img.width > maxWidth) ? (maxWidth / img.width) : 1;
+        extImgWidth = img.width * scale;
+        extImgHeight = img.height * scale;
+        
+        // Create a temporary canvas to reduce resolution and quality
+        let tempCanvas = document.createElement("canvas");
+        tempCanvas.width = extImgWidth;
+        tempCanvas.height = extImgHeight;
+        let tempCtx = tempCanvas.getContext("2d");
+        tempCtx.drawImage(img, 0, 0, extImgWidth, extImgHeight);
+        // Convert to JPEG with quality factor 0.7
+        let reducedDataUrl = tempCanvas.toDataURL("image/jpeg", 0.7);
+        
+        let reducedImg = new Image();
+        reducedImg.onload = async () => {
+          extCanvas.width = extImgWidth;
+          extCanvas.height = extImgHeight;
+          extCtx.drawImage(reducedImg, 0, 0, extImgWidth, extImgHeight);
+          try {
+            await poseExt.send({ image: reducedImg });
+          } catch (error) {
+            console.error("Error processing extension image:", error);
+            extReportDiv.innerHTML = `<p>Error processing image.</p>`;
+          }
+        };
+        reducedImg.onerror = () => {
+          console.error("Error loading reduced extension image.");
+          extReportDiv.innerHTML = "<p>Error loading image.</p>";
+        };
+        reducedImg.src = reducedDataUrl;
       };
       img.onerror = () => {
         console.error("Failed to load extension image.");
@@ -294,30 +307,40 @@
       img.src = URL.createObjectURL(file);
     });
 
-    // Process Flexion Image Upload
+    // Process Flexion Image Upload with image reduction
     document.getElementById("flexInput").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const img = new Image();
-      img.onload = async () => {
-        if (img.width > maxWidth) {
-          const scale = maxWidth / img.width;
-          flexImgWidth = img.width * scale;
-          flexImgHeight = img.height * scale;
-        } else {
-          flexImgWidth = img.width;
-          flexImgHeight = img.height;
-        }
-        flexCanvas.width = flexImgWidth;
-        flexCanvas.height = flexImgHeight;
-        flexCtx.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
-        try {
-          await poseFlex.send({ image: img });
-        } catch (error) {
-          console.error("Error processing flexion image:", error);
-          flexReportDiv.innerHTML = `<p>Error processing image.</p>`;
-        }
-        URL.revokeObjectURL(img.src);
+      img.onload = () => {
+        let scale = (img.width > maxWidth) ? (maxWidth / img.width) : 1;
+        flexImgWidth = img.width * scale;
+        flexImgHeight = img.height * scale;
+        
+        let tempCanvas = document.createElement("canvas");
+        tempCanvas.width = flexImgWidth;
+        tempCanvas.height = flexImgHeight;
+        let tempCtx = tempCanvas.getContext("2d");
+        tempCtx.drawImage(img, 0, 0, flexImgWidth, flexImgHeight);
+        let reducedDataUrl = tempCanvas.toDataURL("image/jpeg", 0.7);
+        
+        let reducedImg = new Image();
+        reducedImg.onload = async () => {
+          flexCanvas.width = flexImgWidth;
+          flexCanvas.height = flexImgHeight;
+          flexCtx.drawImage(reducedImg, 0, 0, flexImgWidth, flexImgHeight);
+          try {
+            await poseFlex.send({ image: reducedImg });
+          } catch (error) {
+            console.error("Error processing flexion image:", error);
+            flexReportDiv.innerHTML = `<p>Error processing image.</p>`;
+          }
+        };
+        reducedImg.onerror = () => {
+          console.error("Error loading reduced flexion image.");
+          flexReportDiv.innerHTML = "<p>Error loading image.</p>";
+        };
+        reducedImg.src = reducedDataUrl;
       };
       img.onerror = () => {
         console.error("Failed to load flexion image.");
